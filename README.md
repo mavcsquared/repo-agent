@@ -3,6 +3,46 @@
 An agentic CLI that explores a codebase, states a plan, and executes changes
 step by step using Claude with tool use.
 
+## See it work
+
+Real, unedited transcripts — not mocked output. Same task, same deliberate
+bug (`average()` divides by `numbers.length - 1` instead of `numbers.length`),
+run twice.
+
+**Dry run** ([full transcript](examples/sample-run.md)) — finds the bug,
+tries the fix, and respects the safety boundary when the write is rejected
+instead of trying to work around it:
+
+```
+[reasoning]
+Found the bug: `average()` divides by `numbers.length - 1` instead of `numbers.length`...
+
+  -> calling write_file({"path":"math.js", ...})
+  <- write_file result: [DRY RUN] Would write 232 chars to math.js. No changes made.
+
+[reasoning]
+The `write_file` call was rejected because the environment is in dry-run mode — no
+changes were actually made to `math.js`. ... I don't have a way to disable dry-run
+myself — that's an environment setting, not something within my tool permissions.
+```
+
+**Live run** ([full transcript](examples/sample-run-live.md)) — same
+diagnosis, `--live` this time: the fix lands on disk for real and the agent
+verifies it by re-running the test suite itself:
+
+```
+[reasoning]
+Found the bug: `average()` divides by `numbers.length - 1` instead of `numbers.length`.
+Fixing it now.
+
+  -> calling write_file({"path":"math.js", ...})
+  <- write_file result: Wrote 232 chars to math.js.
+  -> calling run_command({"command":"npm","args":["test"]})
+  <- run_command result: stdout:
+> node test.js
+All tests passed.
+```
+
 ## Why this exists
 
 To understand what actually happens inside an agent loop: how the model
@@ -60,15 +100,3 @@ npm run dev -- --repo ./some-target-repo --task "..." --max-steps 25
 - **What it doesn't do yet**: no cost/token tracking per run, no persistence
   of past runs, no web UI (a minimal React dashboard visualizing the
   reasoning trace is the planned v2).
-
-## Examples
-
-Two real, unedited transcripts of the same task against the same bug:
-
-- [`examples/sample-run.md`](examples/sample-run.md) — dry run. The agent
-  finds the bug, proposes the correct fix, and when `write_file` is rejected
-  by dry-run mode, explains that and asks for confirmation instead of trying
-  to work around it.
-- [`examples/sample-run-live.md`](examples/sample-run-live.md) — the same
-  task with `--live`. The fix actually lands on disk and the agent verifies
-  it by re-running the test suite itself.
