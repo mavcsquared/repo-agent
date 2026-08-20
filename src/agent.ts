@@ -16,6 +16,7 @@ export interface AgentStep {
   type: "text" | "tool_call" | "tool_result";
   content: string;
   toolName?: string;
+  isError?: boolean;
 }
 
 export interface AgentRunOptions {
@@ -85,12 +86,18 @@ export async function runAgent(opts: AgentRunOptions): Promise<AgentStep[]> {
         dryRun: opts.dryRun,
       });
 
-      emit({ type: "tool_result", toolName: block.name, content: result });
+      emit({
+        type: "tool_result",
+        toolName: block.name,
+        content: result.content,
+        isError: result.isError,
+      });
 
       toolResults.push({
         type: "tool_result",
         tool_use_id: block.id,
-        content: result,
+        content: result.content,
+        is_error: result.isError,
       });
     }
 

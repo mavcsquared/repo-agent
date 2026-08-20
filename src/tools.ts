@@ -155,71 +155,111 @@ export interface ToolExecutionOptions {
   onWrite?: (relPath: string, content: string) => void;
 }
 
+export interface ToolResult {
+  content: string;
+  isError?: boolean;
+}
+
+/**
+ * Never rejects. Every failure mode a tool can hit — a path that escapes the
+ * sandbox, a missing file, a refused command — is reported back as a normal
+ * ToolResult with isError: true, the same way the Anthropic API expects a
+ * failed tool_result to look. That's what lets the model see its own
+ * mistake and recover (try a different path, ask for clarification) instead
+ * of one bad tool call crashing the entire multi-step run.
+ */
 export async function executeTool(
   name: string,
   input: any,
   sandbox: Sandbox,
   opts: ToolExecutionOptions
-): Promise<string> {
-  switch (name) {
-    case "list_directory": {
-      const dir = sandbox.resolve(input.path);
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      return entries
-        .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-        .join("\n");
-    }
+): Promise<ToolResult> {
+  try {
+    switch (name) {
+      case "list_directory": {
+        const dir = sandbox.resolve(input.path);
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        return {
+          content: entries
+            .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+            .join("\n"),
+        };
+      }
 
-    case "read_file": {
-      const filePath = sandbox.resolve(input.path);
-      return await fs.readFile(filePath, "utf-8");
-    }
+      case "read_file": {
+        const filePath = sandbox.resolve(input.path);
+        return { content: await fs.readFile(filePath, "utf-8") };
+      }
 
-    case "write_file": {
-      if (opts.dryRun) {
+      case "write_file": {
+        // Validate the path even in dry-run — a preview that skips this
+        // would silently accept a path-escape attempt and report it as a
+        // harmless would-be write, only to actually fail once --live is
+        // passed. Resolving first keeps dry-run and live behavior in sync.
+        const filePath = sandbox.resolve(input.path);
+        if (opts.dryRun) {
+          opts.onWrite?.(input.path, input.content);
+          return {
+            content: `[DRY RUN] Would write ${input.content.length} chars to ${input.path}. No changes made.`,
+          };
+        }
+        await fs.writeFile(filePath, input.content, "utf-8");
         opts.onWrite?.(input.path, input.content);
-        return `[DRY RUN] Would write ${input.content.length} chars to ${input.path}. No changes made.`;
-      }
-      const filePath = sandbox.resolve(input.path);
-      await fs.writeFile(filePath, input.content, "utf-8");
-      opts.onWrite?.(input.path, input.content);
-      return `Wrote ${input.content.length} chars to ${input.path}.`;
-    }
-
-    case "run_command": {
-      if (!ALLOWED_COMMANDS.has(input.command)) {
-        return `Command '${input.command}' is not in the allowed list (${[...ALLOWED_COMMANDS].join(", ")}). Refused.`;
+        return { content: `Wrote ${input.content.length} chars to ${input.path}.` };
       }
 
-      const args: string[] = input.args ?? [];
-      const policy = COMMAND_POLICIES[input.command];
+      case "run_command": {
+        if (!ALLOWED_COMMANDS.has(input.command)) {
+          return {
+            content: `Command '${input.command}' is not in the allowed list (${[...ALLOWED_COMMANDS].join(", ")}). Refused.`,
+            isError: true,
+          };
+        }
 
-      if (policy?.allowedSubcommands) {
-        const subcommand = args[0];
-        if (!subcommand || !policy.allowedSubcommands.has(subcommand)) {
-          return `Subcommand '${subcommand ?? "(none)"}' is not allowed for '${input.command}'. Allowed: ${[...policy.allowedSubcommands].join(", ")}. Refused.`;
+        const args: string[] = input.args ?? [];
+        const policy = COMMAND_POLICIES[input.command];
+
+        if (policy?.allowedSubcommands) {
+          const subcommand = args[0];
+          if (!subcommand || !policy.allowedSubcommands.has(subcommand)) {
+            return {
+              content: `Subcommand '${subcommand ?? "(none)"}' is not allowed for '${input.command}'. Allowed: ${[...policy.allowedSubcommands].join(", ")}. Refused.`,
+              isError: true,
+            };
+          }
+        }
+
+        if (policy?.blockedFlags) {
+          const blocked = args.find((a) => policy.blockedFlags!.has(a));
+          if (blocked) {
+            return {
+              content: `Flag '${blocked}' is not allowed for '${input.command}' (inline code execution is blocked). Refused.`,
+              isError: true,
+            };
+          }
+        }
+
+        try {
+          const { stdout, stderr } = await execFileAsync(input.command, args, {
+            cwd: sandbox.resolve("."),
+            timeout: 30_000,
+          });
+          return { content: `stdout:\n${stdout}\nstderr:\n${stderr}` };
+        } catch (err: any) {
+          return {
+            content: `Command failed: ${err.message}\nstdout:\n${err.stdout ?? ""}\nstderr:\n${err.stderr ?? ""}`,
+            isError: true,
+          };
         }
       }
 
-      if (policy?.blockedFlags) {
-        const blocked = args.find((a) => policy.blockedFlags!.has(a));
-        if (blocked) {
-          return `Flag '${blocked}' is not allowed for '${input.command}' (inline code execution is blocked). Refused.`;
-        }
-      }
-
-      try {
-        const { stdout, stderr } = await execFileAsync(input.command, input.args, {
-          cwd: sandbox.resolve("."),
-          timeout: 30_000,
-        });
-        return `stdout:\n${stdout}\nstderr:\n${stderr}`;
-      } catch (err: any) {
-        return `Command failed: ${err.message}\nstdout:\n${err.stdout ?? ""}\nstderr:\n${err.stderr ?? ""}`;
-      }
+      default:
+        return { content: `Unknown tool: ${name}`, isError: true };
     }
-
-    default:
-      return `Unknown tool: ${name}`;
+  } catch (err: any) {
+    // Catches everything an individual case doesn't already handle itself —
+    // Sandbox.resolve() rejecting a path-escape attempt, ENOENT/EACCES from
+    // fs calls, malformed input, etc.
+    return { content: `Error: ${err.message}`, isError: true };
   }
 }

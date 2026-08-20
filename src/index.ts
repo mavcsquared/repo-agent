@@ -47,7 +47,8 @@ async function main() {
       } else if (step.type === "tool_result") {
         const preview =
           step.content.length > 300 ? step.content.slice(0, 300) + "..." : step.content;
-        console.log(`  <- ${step.toolName} result: ${preview}`);
+        const label = step.isError ? "ERROR" : "result";
+        console.log(`  <- ${step.toolName} ${label}: ${preview}`);
       }
     },
   });
