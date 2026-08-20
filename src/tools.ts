@@ -70,7 +70,7 @@ export const toolSchemas = [
   {
     name: "run_command",
     description:
-      "Run a whitelisted shell command (e.g. test runner) inside the repo root. Not arbitrary shell execution — only whitelisted binaries are allowed.",
+      "Run a whitelisted shell command (e.g. test runner) inside the repo root. Not arbitrary shell execution — only whitelisted binaries are allowed, and some of them are further restricted: git is read-only (status/diff/log/show/branch/ls-files/rev-parse — no commit, push, reset, clean, or checkout), npm blocks registry/credential subcommands (no publish/owner/token/login), and npx/node/python3 block their inline code-execution flags (-c/-e/-p/--eval/--print).",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -87,6 +87,68 @@ export const toolSchemas = [
 ];
 
 const ALLOWED_COMMANDS = new Set(["npm", "npx", "node", "pytest", "python3", "git"]);
+
+/**
+ * Being in ALLOWED_COMMANDS only means the binary itself is trusted — several
+ * of these binaries have subcommands or flags that are as dangerous as
+ * unrestricted shell (git push/reset/clean, npx running an arbitrary
+ * package, node/python's inline-eval flags). A per-command policy narrows
+ * what's actually allowed once the binary check passes.
+ *
+ * - `allowedSubcommands`: if set, args[0] must be one of these.
+ * - `blockedFlags`: if set, refuse the call if any arg is one of these,
+ *   regardless of position (covers inline code-execution flags).
+ */
+interface CommandPolicy {
+  allowedSubcommands?: Set<string>;
+  blockedFlags?: Set<string>;
+}
+
+const COMMAND_POLICIES: Partial<Record<string, CommandPolicy>> = {
+  git: {
+    // Read-only / inspection only. No commit, push, reset, clean, checkout,
+    // rebase, merge, or anything else that mutates history or the working
+    // tree — the agent's job is to propose changes via write_file, not to
+    // manage git state itself.
+    allowedSubcommands: new Set([
+      "status",
+      "diff",
+      "log",
+      "show",
+      "branch",
+      "ls-files",
+      "rev-parse",
+    ]),
+  },
+  npm: {
+    // No publish/owner/token/access/login/adduser/deprecate — nothing that
+    // touches the registry or credentials.
+    allowedSubcommands: new Set([
+      "test",
+      "run",
+      "run-script",
+      "install",
+      "ci",
+      "list",
+      "ls",
+      "outdated",
+      "audit",
+    ]),
+  },
+  npx: {
+    // npx's whole job is "fetch and run a package" — that's already close to
+    // arbitrary code execution. At minimum, block its own inline-eval flags.
+    blockedFlags: new Set(["-c", "--call"]),
+  },
+  node: {
+    // -e/-p/--eval/--print run a string as code directly — no file, no
+    // sandbox visibility into what actually ran.
+    blockedFlags: new Set(["-e", "--eval", "-p", "--print"]),
+  },
+  python3: {
+    blockedFlags: new Set(["-c"]),
+  },
+};
 
 export interface ToolExecutionOptions {
   dryRun: boolean;
@@ -128,6 +190,24 @@ export async function executeTool(
       if (!ALLOWED_COMMANDS.has(input.command)) {
         return `Command '${input.command}' is not in the allowed list (${[...ALLOWED_COMMANDS].join(", ")}). Refused.`;
       }
+
+      const args: string[] = input.args ?? [];
+      const policy = COMMAND_POLICIES[input.command];
+
+      if (policy?.allowedSubcommands) {
+        const subcommand = args[0];
+        if (!subcommand || !policy.allowedSubcommands.has(subcommand)) {
+          return `Subcommand '${subcommand ?? "(none)"}' is not allowed for '${input.command}'. Allowed: ${[...policy.allowedSubcommands].join(", ")}. Refused.`;
+        }
+      }
+
+      if (policy?.blockedFlags) {
+        const blocked = args.find((a) => policy.blockedFlags!.has(a));
+        if (blocked) {
+          return `Flag '${blocked}' is not allowed for '${input.command}' (inline code execution is blocked). Refused.`;
+        }
+      }
+
       try {
         const { stdout, stderr } = await execFileAsync(input.command, input.args, {
           cwd: sandbox.resolve("."),
