@@ -61,9 +61,14 @@ npm run dev -- --repo ./some-target-repo --task "..." --max-steps 25
   of past runs, no web UI (a minimal React dashboard visualizing the
   reasoning trace is the planned v2).
 
-## Example
+## Examples
 
-A real, unedited transcript from a dry run — the agent finds a deliberate bug,
-proposes the correct one-line fix, and when `write_file` is rejected by
-dry-run mode, explains that and asks for confirmation instead of trying to
-work around it: [`examples/sample-run.md`](examples/sample-run.md).
+Two real, unedited transcripts of the same task against the same bug:
+
+- [`examples/sample-run.md`](examples/sample-run.md) — dry run. The agent
+  finds the bug, proposes the correct fix, and when `write_file` is rejected
+  by dry-run mode, explains that and asks for confirmation instead of trying
+  to work around it.
+- [`examples/sample-run-live.md`](examples/sample-run-live.md) — the same
+  task with `--live`. The fix actually lands on disk and the agent verifies
+  it by re-running the test suite itself.
