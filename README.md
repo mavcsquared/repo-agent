@@ -63,31 +63,7 @@ npm run dev -- --repo ./some-target-repo --task "..." --max-steps 25
 
 ## Example
 
-```
-$ npm run dev -- --repo ./example-app --task "Add input validation to the signup endpoint"
-
-Repo:     /Users/you/example-app
-Task:     Add input validation to the signup endpoint
-Mode:     DRY RUN (no files will be changed)
-Max steps: 15
-------------------------------------------------------------
-
-[reasoning]
-I'll start by looking at the repo structure to find the signup endpoint.
-
-  -> calling list_directory({"path":"."})
-  <- list_directory result: src/
-package.json
-...
-
-[reasoning]
-Plan:
-1. Read the signup route handler to see current validation (if any).
-2. Read package.json to see what validation library, if any, is already a dependency.
-3. Add validation using the existing convention if one exists, or a minimal
-   inline check if not.
-4. Write the updated file and summarize the change.
-
-  -> calling read_file({"path":"src/routes/signup.ts"})
-  ...
-```
+A real, unedited transcript from a dry run — the agent finds a deliberate bug,
+proposes the correct one-line fix, and when `write_file` is rejected by
+dry-run mode, explains that and asks for confirmation instead of trying to
+work around it: [`examples/sample-run.md`](examples/sample-run.md).
