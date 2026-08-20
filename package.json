@@ -2,6 +2,7 @@
   "name": "repo-agent",
   "version": "0.1.0",
   "description": "An agentic CLI that explores a codebase, plans a refactor, and executes it step by step with tool use.",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
